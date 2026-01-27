@@ -18,10 +18,10 @@ export const authOptions: NextAuthOptions = {
                 allowDangerousEmailAccountLinking: true,
             })
         ] : []),
-        ...(process.env.GITHUB_CLIENT_ID ? [
+        ...(process.env.GITHUB_CLIENT_ID || process.env.GH_CLIENT_ID ? [
             GitHubProvider({
-                clientId: process.env.GITHUB_CLIENT_ID!,
-                clientSecret: process.env.GITHUB_CLIENT_SECRET!,
+                clientId: (process.env.GITHUB_CLIENT_ID || process.env.GH_CLIENT_ID)!,
+                clientSecret: (process.env.GITHUB_CLIENT_SECRET || process.env.GH_CLIENT_SECRET)!,
                 allowDangerousEmailAccountLinking: true,
             })
         ] : []),
