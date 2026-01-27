@@ -28,6 +28,9 @@ yarn-error.log*
 # local env files
 .env*.local
 .env
+.env.development.local
+.env.test.local
+.env.production.local
 
 # vercel
 .vercel
@@ -44,6 +47,15 @@ next-env.d.ts
 .idea/
 *.swp
 *.swo
+*.swn
 
 # OS
 Thumbs.db
+.DS_Store
+
+# Logs
+*.log
+
+# Temporary files
+.tmp/
+temp/

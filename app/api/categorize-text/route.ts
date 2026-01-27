@@ -1,62 +1,55 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { TextAnalyticsClient, AzureKeyCredential } from '@azure/ai-text-analytics'
 import { azureConfig } from '@/lib/azure-config'
+import { getSession } from '@/lib/auth'
+import { handleApiError, AuthenticationError, ValidationError } from '@/lib/error-handler'
 
 export async function POST(request: NextRequest) {
   try {
-    const { text } = await request.json()
-
-    if (!text) {
-      return NextResponse.json({ error: 'Text is required' }, { status: 400 })
+    // 1. Authenticate user
+    const session = await getSession()
+    if (!session?.user) {
+      throw new AuthenticationError()
     }
 
-    // Initialize Text Analytics client
+    // 2. Parse and validate request
+    const { text } = await request.json()
+    if (!text) {
+      throw new ValidationError('Text content is required for categorization')
+    }
+
+    // 3. Initialize Azure client
     const client = new TextAnalyticsClient(
       azureConfig.cognitive.text.endpoint,
       new AzureKeyCredential(azureConfig.cognitive.text.key)
     )
 
-    // Extract key phrases
+    // 4. Extract key phrases
     const [result] = await client.extractKeyPhrases([text])
 
-    if (result.error) {
-      throw new Error(result.error.message)
+    if ('error' in result) {
+      throw new Error(result.error?.message || 'Extraction failed')
     }
 
     const keyPhrases = result.keyPhrases || []
     const lowerPhrases = keyPhrases.map(p => p.toLowerCase())
+    const categories: string[] = []
 
-    // Categorize based on key phrases
-    const categories = []
-    const lowerText = text.toLowerCase()
+    // 5. Categorize based on keywords
+    const keywordMap: Record<string, string[]> = {
+      education: ['graduation', 'degree', 'school', 'university', 'college', 'study', 'education'],
+      celebration: ['birthday', 'celebration', 'party', 'anniversary', 'wedding', 'event'],
+      career: ['job', 'work', 'career', 'promotion', 'interview', 'office', 'salary'],
+      travel: ['travel', 'trip', 'vacation', 'flight', 'hotel', 'journey', 'airport'],
+      relationship: ['wedding', 'marriage', 'engagement', 'partner', 'date'],
+      family: ['baby', 'child', 'family', 'parent', 'sibling', 'mom', 'dad'],
+      health: ['health', 'medical', 'doctor', 'hospital', 'illness', 'fitness', 'exercise'],
+    }
 
-    // Education
-    if (lowerPhrases.some(p => p.includes('graduation') || p.includes('degree') || p.includes('school') || p.includes('university') || p.includes('college'))) {
-      categories.push('education')
-    }
-    // Celebration
-    if (lowerPhrases.some(p => p.includes('birthday') || p.includes('celebration') || p.includes('party') || p.includes('anniversary'))) {
-      categories.push('celebration')
-    }
-    // Career
-    if (lowerPhrases.some(p => p.includes('job') || p.includes('work') || p.includes('career') || p.includes('promotion') || p.includes('interview'))) {
-      categories.push('career')
-    }
-    // Travel
-    if (lowerPhrases.some(p => p.includes('travel') || p.includes('trip') || p.includes('vacation') || p.includes('flight') || p.includes('hotel'))) {
-      categories.push('travel')
-    }
-    // Relationship
-    if (lowerPhrases.some(p => p.includes('wedding') || p.includes('marriage') || p.includes('engagement') || p.includes('divorce'))) {
-      categories.push('relationship')
-    }
-    // Family
-    if (lowerPhrases.some(p => p.includes('baby') || p.includes('child') || p.includes('family') || p.includes('parent') || p.includes('sibling'))) {
-      categories.push('family')
-    }
-    // Health
-    if (lowerPhrases.some(p => p.includes('health') || p.includes('medical') || p.includes('doctor') || p.includes('hospital') || p.includes('illness'))) {
-      categories.push('health')
+    for (const [category, keywords] of Object.entries(keywordMap)) {
+      if (lowerPhrases.some(p => keywords.some(k => p.includes(k)))) {
+        categories.push(category)
+      }
     }
 
     // Default category if no specific match
@@ -66,10 +59,12 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ categories })
   } catch (error) {
-    console.error('Text categorization error:', error)
-    return NextResponse.json(
-      { error: 'Failed to categorize text' },
-      { status: 500 }
-    )
+    if (error instanceof AuthenticationError || error instanceof ValidationError) {
+      const { message, statusCode } = handleApiError(error)
+      return NextResponse.json({ error: message }, { status: statusCode })
+    }
+
+    console.warn('[API/CATEGORIZE] Service error, returning fallback', error)
+    return NextResponse.json({ categories: ['general'] })
   }
 }

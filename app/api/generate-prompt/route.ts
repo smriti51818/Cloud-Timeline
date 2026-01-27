@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { getSession } from '@/lib/auth'
+import { handleApiError, AuthenticationError } from '@/lib/error-handler'
 
 const reflectionPrompts = [
   "What made you smile today?",
@@ -12,25 +14,22 @@ const reflectionPrompts = [
   "Who has been your biggest supporter lately?",
   "What is a goal you're working towards?",
   "What does happiness mean to you right now?",
-  "What is something you wish you could change?",
-  "What is your favorite way to relax?",
-  "What inspires you these days?",
-  "What is a skill you'd like to develop?",
-  "What does success look like for you?",
-  "What is something you're proud of?",
-  "What would you do if you weren't afraid?",
-  "What is your favorite memory from this year?",
-  "What is something that surprised you recently?",
 ]
 
 export async function GET() {
   try {
-    // Return a random prompt
+    // 1. Authenticate user
+    const session = await getSession()
+    if (!session?.user) {
+      throw new AuthenticationError()
+    }
+
+    // 2. Return a random prompt
     const randomPrompt = reflectionPrompts[Math.floor(Math.random() * reflectionPrompts.length)]
 
     return NextResponse.json({ prompt: randomPrompt })
   } catch (error) {
-    console.error('Error generating prompt:', error)
-    return NextResponse.json({ error: 'Failed to generate prompt' }, { status: 500 })
+    const { message, statusCode } = handleApiError(error)
+    return NextResponse.json({ error: message }, { status: statusCode })
   }
 }

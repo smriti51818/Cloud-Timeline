@@ -2,32 +2,51 @@ import { NextRequest, NextResponse } from 'next/server'
 import { uploadFile } from '@/lib/azure-storage'
 import { createTimelineEntry } from '@/lib/azure-cosmos'
 import { analyzeImage, transcribeAudio, analyzeSentiment, categorizeText } from '@/lib/azure-cognitive'
+import { getSession } from '@/lib/auth'
+import { handleApiError, AuthenticationError, ValidationError, AppError } from '@/lib/error-handler'
+import { UPLOAD_LIMITS, SUCCESS_MESSAGES, ERROR_MESSAGES } from '@/lib/constants'
 
 export async function POST(request: NextRequest) {
   try {
+    // 1. Authenticate user
+    const session = await getSession()
+    if (!session?.user) {
+      throw new AuthenticationError()
+    }
+    const userId = session.user.id
+
+    // 2. Parse and validate form data
     const formData = await request.formData()
-    const file = formData.get('file') as File
+    const file = formData.get('file') as File | null
     const title = formData.get('title') as string
     const description = formData.get('description') as string
-    const type = formData.get('type') as 'photo' | 'voice' | 'text'
-    const userId = formData.get('userId') as string
+    const entryTypeStr = formData.get('type') as string
+    if (!['photo', 'voice', 'text'].includes(entryTypeStr)) {
+      throw new ValidationError('Invalid entry type')
+    }
+    const type = entryTypeStr as 'photo' | 'voice' | 'text'
 
-    console.log('[UPLOAD] Request received', {
-      hasFile: Boolean(file),
-      fileName: file?.name,
-      fileType: file?.type,
-      fileSize: file ? `${file.size} bytes` : undefined,
-      title,
-      type,
-      userId,
-    })
-
-    if (!file && type !== 'text') {
-      return NextResponse.json({ error: 'File is required' }, { status: 400 })
+    if (!title) {
+      throw new ValidationError('Title is required')
     }
 
-    if (!title || !userId) {
-      return NextResponse.json({ error: 'Title and userId are required' }, { status: 400 })
+    if (type !== 'text' && !file) {
+      throw new ValidationError('File is required for media entries')
+    }
+
+    // 3. File validation
+    if (file) {
+      if (file.size > UPLOAD_LIMITS.MAX_FILE_SIZE_BYTES) {
+        throw new ValidationError(ERROR_MESSAGES.FILE_TOO_LARGE)
+      }
+
+      const allowedTypes = (type === 'photo'
+        ? UPLOAD_LIMITS.ALLOWED_IMAGE_TYPES
+        : UPLOAD_LIMITS.ALLOWED_AUDIO_TYPES) as readonly string[]
+
+      if (!allowedTypes.includes(file.type)) {
+        throw new ValidationError(ERROR_MESSAGES.INVALID_FILE_TYPE)
+      }
     }
 
     let mediaUrl = ''
@@ -35,28 +54,18 @@ export async function POST(request: NextRequest) {
     let transcription: string | undefined = undefined
     let sentiment: 'positive' | 'negative' | 'neutral' = 'neutral'
 
-    // Upload file to Azure Blob Storage if it's not a text entry
+    // 4. Upload file to Azure Blob Storage
     if (file && type !== 'text') {
       const entryId = crypto.randomUUID()
       try {
-        mediaUrl = await uploadFile(file, userId, entryId, (p) => {
-          if (Number.isFinite(p)) console.log('[UPLOAD] Progress %', Math.round(p))
-        })
-        console.log('[UPLOAD] Blob uploaded', { mediaUrl })
-      } catch (err: any) {
-        console.error('[UPLOAD] Blob upload failed', {
-          message: err?.message,
-          name: err?.name,
-          code: err?.code,
-          statusCode: err?.statusCode,
-          details: err?.details,
-          stack: err?.stack,
-        })
-        throw err
+        mediaUrl = await uploadFile(file, userId, entryId)
+      } catch (err) {
+        console.error('[API/UPLOAD] Blob upload failed', err)
+        throw new AppError(ERROR_MESSAGES.UPLOAD_FAILED, 500, 'UPLOAD_FAILED')
       }
     }
 
-    // Process based on entry type
+    // 5. Intelligent Processing (AI)
     try {
       if (type === 'photo' && mediaUrl) {
         const imageAnalysis = await analyzeImage(mediaUrl)
@@ -65,30 +74,25 @@ export async function POST(request: NextRequest) {
         const transcriptionResult = await transcribeAudio(mediaUrl)
         transcription = transcriptionResult.text
 
-        // Analyze sentiment of transcribed text
         const sentimentResult = await analyzeSentiment(transcription)
         sentiment = sentimentResult.sentiment
 
-        // Categorize the transcribed text
         const categories = await categorizeText(transcription)
         aiTags = categories
       } else if (type === 'text') {
-        // Analyze sentiment and categorize text entries
-        const sentimentResult = await analyzeSentiment(description || title)
+        const content = description || title
+        const sentimentResult = await analyzeSentiment(content)
         sentiment = sentimentResult.sentiment
 
-        const categories = await categorizeText(description || title)
+        const categories = await categorizeText(content)
         aiTags = categories
       }
     } catch (aiError) {
-      console.warn('[UPLOAD] AI analysis failed, proceeding with defaults', aiError)
-      // Use defaults if AI fails
-      aiTags = []
-      sentiment = 'neutral'
-      transcription = type === 'voice' ? 'Transcription failed' : undefined
+      // AI errors are non-blocking; we still want to save the entry
+      console.warn('[API/UPLOAD] AI processing failed', aiError)
     }
 
-    // Create timeline entry in Cosmos DB
+    // 6. Persistence (Cosmos DB)
     const entry = await createTimelineEntry({
       userId,
       type,
@@ -96,28 +100,17 @@ export async function POST(request: NextRequest) {
       description,
       date: new Date().toISOString(),
       mediaUrl: mediaUrl || undefined,
-      transcription: transcription || undefined,
+      transcription,
       aiTags,
       sentiment,
     })
 
-    return NextResponse.json(entry)
-  } catch (error) {
-    const e = error as any
-    console.error('[UPLOAD] Error', {
-      message: e?.message,
-      name: e?.name,
-      code: e?.code,
-      statusCode: e?.statusCode,
-      details: e?.details,
-      stack: e?.stack,
-    })
     return NextResponse.json({
-      error: 'Failed to upload entry',
-      message: e?.message,
-      code: e?.code,
-      statusCode: e?.statusCode,
-      details: e?.details,
-    }, { status: 500 })
+      message: SUCCESS_MESSAGES.ENTRY_CREATED,
+      data: entry
+    })
+  } catch (error) {
+    const { message, statusCode, code } = handleApiError(error)
+    return NextResponse.json({ error: { message, code } }, { status: statusCode })
   }
 }

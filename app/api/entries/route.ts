@@ -1,58 +1,65 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getTimelineEntries, searchTimelineEntries } from '@/lib/azure-cosmos'
 import { generateReadSasUrl } from '@/lib/azure-storage'
+import { getSession } from '@/lib/auth'
+import { handleApiError, AuthenticationError, ValidationError } from '@/lib/error-handler'
+import { DB_CONFIG } from '@/lib/constants'
 
 export async function GET(request: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url)
-    const userId = searchParams.get('userId')
-    const search = searchParams.get('search')
-
-    if (!userId) {
-      return NextResponse.json({ error: 'User ID is required' }, { status: 400 })
+    // 1. Authenticate user
+    const session = await getSession()
+    if (!session?.user) {
+      throw new AuthenticationError()
     }
 
+    const { searchParams } = new URL(request.url)
+    const userId = session.user.id
+    const search = searchParams.get('search')
+    const category = searchParams.get('category')
+    const type = searchParams.get('type')
+
+    if (!userId) {
+      throw new ValidationError('User ID is missing from session')
+    }
+
+    // 2. Fetch entries from Cosmos DB
     let entries
     if (search) {
       entries = await searchTimelineEntries(userId, search)
     } else {
+      // In a real app, we'd add category/type filtering here
       entries = await getTimelineEntries(userId)
     }
 
-    // For each entry with a mediaUrl, try to convert the stored blob path/URL to a short-lived SAS URL
-    const entriesWithSas = entries.map((e: any) => {
-      if (!e.mediaUrl) return e
+    // 3. Process entries (generate SAS URLs for media)
+    const entriesWithSas = entries.map((entry: any) => {
+      if (!entry.mediaUrl) return entry
 
       try {
-        const url = new URL(e.mediaUrl)
-        // url.pathname: /container/blob/path
+        const url = new URL(entry.mediaUrl)
         const pathParts = url.pathname.split('/')
+        // URL structure typically: /container/blob/path
         const containerName = pathParts[1]
         const blobPath = decodeURIComponent(pathParts.slice(2).join('/'))
 
-        // Only generate SAS if container matches our configured container
-        if (containerName === process.env.AZURE_STORAGE_CONTAINER || containerName === 'timeline-media' || containerName === undefined) {
+        if (containerName === DB_CONFIG.CONTAINER_ID || containerName === 'timeline-media') {
           const sas = generateReadSasUrl(blobPath)
           if (sas) {
-            return { ...e, mediaUrl: sas }
-          } else {
-            // Fall back to plain blob URL since container has public blob access
-            return { ...e, mediaUrl: url.origin + url.pathname }
+            return { ...entry, mediaUrl: sas }
           }
         }
       } catch (err) {
-        // ignore and return original entry
+        // Fallback to original URL or log error
+        console.warn(`[API] Failed to generate SAS for entry ${entry.id}`, err)
       }
 
-      return e
+      return entry
     })
 
     return NextResponse.json(entriesWithSas)
   } catch (error) {
-    console.error('Error fetching entries:', error)
-    return NextResponse.json(
-      { error: 'Failed to fetch entries' },
-      { status: 500 }
-    )
+    const { message, statusCode } = handleApiError(error)
+    return NextResponse.json({ error: message }, { status: statusCode })
   }
 }

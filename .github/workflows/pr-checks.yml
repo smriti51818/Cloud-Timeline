@@ -1,0 +1,80 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  lint-and-type-check:
+    runs-on: ubuntu-latest
+    name: Lint and Type Check
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Run TypeScript type check
+        run: npm run type-check
+
+      - name: Check for console logs
+        run: |
+          if grep -r "console\\.log" --include="*.ts" --include="*.tsx" --exclude-dir=node_modules .; then
+            echo "⚠️  Warning: console.log statements found in code"
+            echo "Please remove console.log statements before merging"
+            # Don't fail the build, just warn
+          fi
+
+  build-check:
+    runs-on: ubuntu-latest
+    name: Build Check
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        env:
+          NEXTAUTH_SECRET: "test-secret-for-build-only"
+          NEXTAUTH_URL: "http://localhost:3000"
+          NEXT_PUBLIC_AZURE_CLIENT_ID: "test"
+          NEXT_PUBLIC_AZURE_TENANT_ID: "test"
+          AZURE_STORAGE_ACCOUNT: "test"
+          AZURE_STORAGE_KEY: "test"
+          AZURE_STORAGE_CONNECTION_STRING: "test"
+          AZURE_COSMOS_ENDPOINT: "https://test.documents.azure.com:443/"
+          AZURE_COSMOS_KEY: "test"
+          AZURE_COSMOS_DATABASE: "test"
+          AZURE_COSMOS_CONTAINER: "test"
+          AZURE_COGNITIVE_VISION_KEY: "test"
+          AZURE_COGNITIVE_VISION_ENDPOINT: "https://test.api.cognitive.microsoft.com/"
+          AZURE_COGNITIVE_SPEECH_KEY: "test"
+          AZURE_COGNITIVE_SPEECH_REGION: "test"
+          AZURE_COGNITIVE_TEXT_KEY: "test"
+          AZURE_COGNITIVE_TEXT_ENDPOINT: "https://test.api.cognitive.microsoft.com/"
+        run: npm run build
+
+      - name: Check bundle size
+        run: |
+          echo "📦 Build output size:"
+          du -sh .next/ || true

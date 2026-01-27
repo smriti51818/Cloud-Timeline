@@ -1,23 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { azureConfig } from '@/lib/azure-config'
+import { getSession } from '@/lib/auth'
+import { handleApiError, AuthenticationError, ValidationError, AppError } from '@/lib/error-handler'
 
 export async function POST(request: NextRequest) {
   try {
-    const { audioUrl } = await request.json()
-
-    if (!audioUrl) {
-      return NextResponse.json({ error: 'Audio URL is required' }, { status: 400 })
+    // 1. Authenticate user
+    const session = await getSession()
+    if (!session?.user) {
+      throw new AuthenticationError()
     }
 
-    // Fetch the audio file
+    // 2. Parse and validate request
+    const { audioUrl } = await request.json()
+    if (!audioUrl) {
+      throw new ValidationError('Audio URL is required for transcription')
+    }
+
+    // 3. Fetch the audio file
     const audioResponse = await fetch(audioUrl)
     if (!audioResponse.ok) {
-      throw new Error(`Failed to fetch audio: ${audioResponse.status}`)
+      throw new AppError(`Failed to fetch audio: ${audioResponse.status}`, 400)
     }
 
     const audioBuffer = await audioResponse.arrayBuffer()
 
-    // Use Azure Speech-to-Text REST API
+    // 4. Use Azure Speech-to-Text REST API
     const region = azureConfig.cognitive.speech.region
     const key = azureConfig.cognitive.speech.key
 
@@ -25,13 +33,13 @@ export async function POST(request: NextRequest) {
       method: 'POST',
       headers: {
         'Ocp-Apim-Subscription-Key': key,
-        'Content-Type': 'audio/mpeg', // Adjust based on actual format
+        'Content-Type': 'audio/mpeg',
       },
       body: audioBuffer,
     })
 
     if (!sttResponse.ok) {
-      throw new Error(`Speech API error: ${sttResponse.status}`)
+      throw new AppError(`Speech API error: ${sttResponse.status}`, sttResponse.status)
     }
 
     const result = await sttResponse.json()
@@ -43,13 +51,10 @@ export async function POST(request: NextRequest) {
         language: result.Language || 'en-US'
       })
     } else {
-      throw new Error(`Recognition failed: ${result.RecognitionStatus}`)
+      throw new AppError(`Recognition failed: ${result.RecognitionStatus}`, 500)
     }
   } catch (error) {
-    console.error('Transcription error:', error)
-    return NextResponse.json(
-      { error: 'Failed to transcribe audio' },
-      { status: 500 }
-    )
+    const { message, statusCode } = handleApiError(error)
+    return NextResponse.json({ error: message }, { status: statusCode })
   }
 }

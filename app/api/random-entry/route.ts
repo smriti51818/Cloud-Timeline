@@ -1,18 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { container } from '@/lib/azure-cosmos'
+import { getSession } from '@/lib/auth'
+import { handleApiError, AuthenticationError, ValidationError, NotFoundError } from '@/lib/error-handler'
 
 export async function GET(request: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url)
-    const userId = searchParams.get('userId')
-
-    if (!userId) {
-      return NextResponse.json({ error: 'User ID is required' }, { status: 400 })
+    // 1. Authenticate user
+    const session = await getSession()
+    if (!session?.user) {
+      throw new AuthenticationError()
     }
+    const userId = session.user.id
 
-    // Use the imported container
-
-    // Query all entries for the user
+    // 2. Query random entry from Cosmos DB
     const querySpec = {
       query: 'SELECT * FROM c WHERE c.userId = @userId',
       parameters: [{ name: '@userId', value: userId }],
@@ -21,15 +21,15 @@ export async function GET(request: NextRequest) {
     const { resources: entries } = await container.items.query(querySpec).fetchAll()
 
     if (entries.length === 0) {
-      return NextResponse.json({ error: 'No entries found' }, { status: 404 })
+      throw new NotFoundError('Timeline entries')
     }
 
-    // Select a random entry
+    // 3. Select a random entry
     const randomEntry = entries[Math.floor(Math.random() * entries.length)]
 
     return NextResponse.json(randomEntry)
   } catch (error) {
-    console.error('Error fetching random entry:', error)
-    return NextResponse.json({ error: 'Failed to fetch random entry' }, { status: 500 })
+    const { message, statusCode } = handleApiError(error)
+    return NextResponse.json({ error: message }, { status: statusCode })
   }
 }
