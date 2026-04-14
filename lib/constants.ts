@@ -46,7 +46,11 @@ export const STORAGE_CONFIG = {
 export const DB_CONFIG = {
     DATABASE_ID: 'timeline-db',
     CONTAINER_ID: 'timeline-entries',
+    USERS_CONTAINER_ID: 'users',
+    SESSIONS_CONTAINER_ID: 'sessions',
     PARTITION_KEY: '/userId',
+    USERS_PARTITION_KEY: '/email',
+    SESSIONS_PARTITION_KEY: '/userId',
     MAX_ITEMS_PER_PAGE: 50,
 } as const
 

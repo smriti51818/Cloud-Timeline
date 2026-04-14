@@ -25,6 +25,7 @@
     "@azure/storage-blob": "^12.17.0",
     "@radix-ui/react-select": "^2.2.6",
     "@radix-ui/react-slot": "^1.0.2",
+    "argon2": "^0.44.0",
     "autoprefixer": "^10.0.1",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.0.0",

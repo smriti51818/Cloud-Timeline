@@ -3,6 +3,55 @@ import { azureConfig } from './azure-config'
 import { TimelineEntry } from './types'
 import { AppError } from './error-handler'
 import { DB_CONFIG } from './constants'
+import { encrypt, decrypt } from './encryption'
+
+/**
+ * Fields to be encrypted/decrypted transparently
+ */
+const SENSITIVE_FIELDS = ['title', 'description', 'transcription', 'aiCaption', 'category'] as const
+const SENSITIVE_ARRAY_FIELDS = ['aiTags'] as const
+
+/**
+ * Helper to encrypt sensitive fields of an entry before storage
+ */
+function encryptEntry(entry: Partial<TimelineEntry>): any {
+    const encrypted = { ...entry }
+    
+    for (const field of SENSITIVE_FIELDS) {
+        if (typeof encrypted[field] === 'string') {
+            encrypted[field] = encrypt(encrypted[field] as string)
+        }
+    }
+    
+    for (const field of SENSITIVE_ARRAY_FIELDS) {
+        if (Array.isArray(encrypted[field])) {
+            encrypted[field] = (encrypted[field] as string[]).map(t => encrypt(t))
+        }
+    }
+    
+    return encrypted
+}
+
+/**
+ * Helper to decrypt sensitive fields of an entry after retrieval
+ */
+function decryptEntry(entry: any): TimelineEntry {
+    const decrypted = { ...entry }
+    
+    for (const field of SENSITIVE_FIELDS) {
+        if (typeof decrypted[field] === 'string') {
+            decrypted[field] = decrypt(decrypted[field] as string)
+        }
+    }
+    
+    for (const field of SENSITIVE_ARRAY_FIELDS) {
+        if (Array.isArray(decrypted[field])) {
+            decrypted[field] = (decrypted[field] as string[]).map(t => decrypt(t))
+        }
+    }
+    
+    return decrypted as TimelineEntry
+}
 
 /**
  * Initialize Cosmos DB client
@@ -14,6 +63,8 @@ const cosmosClient = new CosmosClient({
 
 export const database: Database = cosmosClient.database(azureConfig.cosmos.databaseId)
 export const container: Container = database.container(azureConfig.cosmos.containerId)
+export const usersContainer: Container = database.container(DB_CONFIG.USERS_CONTAINER_ID)
+export const sessionsContainer: Container = database.container(DB_CONFIG.SESSIONS_CONTAINER_ID)
 
 /**
  * Ensures the database and container exist
@@ -24,6 +75,14 @@ async function ensureInit(): Promise<void> {
     await database.containers.createIfNotExists({
       id: azureConfig.cosmos.containerId,
       partitionKey: DB_CONFIG.PARTITION_KEY,
+    })
+    await database.containers.createIfNotExists({
+      id: DB_CONFIG.USERS_CONTAINER_ID,
+      partitionKey: DB_CONFIG.USERS_PARTITION_KEY,
+    })
+    await database.containers.createIfNotExists({
+      id: DB_CONFIG.SESSIONS_CONTAINER_ID,
+      partitionKey: DB_CONFIG.SESSIONS_PARTITION_KEY,
     })
   } catch (error) {
     console.error('[COSMOS] Initialization failed:', error)
@@ -45,8 +104,9 @@ export async function createTimelineEntry(
       updatedAt: new Date().toISOString(),
     }
 
-    const { resource } = await container.items.create(newEntry)
-    return resource as TimelineEntry
+    const encryptedEntry = encryptEntry(newEntry)
+    const { resource } = await container.items.create(encryptedEntry)
+    return decryptEntry(resource)
   } catch (error) {
     console.error('[COSMOS] Create failed:', error)
     throw new AppError('Failed to save entry', 500, 'DATABASE_ERROR')
@@ -64,7 +124,7 @@ export async function getTimelineEntries(userId: string): Promise<TimelineEntry[
     }
 
     const { resources } = await container.items.query(querySpec).fetchAll()
-    return resources as TimelineEntry[]
+    return resources.map(decryptEntry)
   } catch (error) {
     console.error('[COSMOS] Query failed:', error)
     throw new AppError('Failed to fetch entries', 500, 'DATABASE_ERROR')
@@ -91,8 +151,9 @@ export async function updateTimelineEntry(
     }
 
     // 3. Replace the item
-    const { resource } = await container.item(id, existing.userId).replace(merged)
-    return resource as TimelineEntry
+    const encryptedUpdates = encryptEntry({ ...existing, ...updates, updatedAt: new Date().toISOString() })
+    const { resource } = await container.item(id, existing.userId).replace(encryptedUpdates)
+    return decryptEntry(resource)
   } catch (error) {
     console.error('[COSMOS] Update failed:', error)
     throw new AppError('Failed to update entry', 500, 'DATABASE_ERROR')
@@ -115,7 +176,7 @@ export async function deleteTimelineEntry(id: string): Promise<TimelineEntry | n
     const existing = resources[0]
 
     await container.item(id, existing.userId).delete()
-    return existing as TimelineEntry
+    return decryptEntry(existing)
   } catch (error) {
     console.error('[COSMOS] Delete failed:', error)
     throw new AppError('Failed to delete entry', 500, 'DATABASE_ERROR')
@@ -130,22 +191,124 @@ export async function searchTimelineEntries(
   searchTerm: string
 ): Promise<TimelineEntry[]> {
   try {
-    const querySpec = {
-      query: `SELECT * FROM c WHERE c.userId = @userId 
-              AND (CONTAINS(c.title, @searchTerm, true) 
-              OR CONTAINS(c.description, @searchTerm, true) 
-              OR ARRAY_CONTAINS(c.aiTags, @searchTerm, true)) 
-              ORDER BY c.date DESC`,
-      parameters: [
-        { name: '@userId', value: userId },
-        { name: '@searchTerm', value: searchTerm },
-      ],
+    const querySpecOnlyPartition = {
+      query: 'SELECT * FROM c WHERE c.userId = @userId ORDER BY c.date DESC',
+      parameters: [{ name: '@userId', value: userId }],
     }
 
-    const { resources } = await container.items.query(querySpec).fetchAll()
-    return resources as TimelineEntry[]
+    const { resources } = await container.items.query(querySpecOnlyPartition).fetchAll()
+    const allEntries = resources.map(decryptEntry)
+
+    // filter in memory because DB ciphertext doesn't support SQL CONTAINS
+    return allEntries.filter(e => 
+      e.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (e.description?.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      (e.aiTags?.some(t => t.toLowerCase().includes(searchTerm.toLowerCase())))
+    )
   } catch (error) {
     console.error('[COSMOS] Search failed:', error)
     throw new AppError('Search failed', 500, 'DATABASE_ERROR')
   }
+}
+
+/**
+ * User Management Methods
+ */
+
+export async function getUserByEmail(email: string): Promise<any | null> {
+  try {
+    const querySpec = {
+      query: 'SELECT * FROM c WHERE c.email = @email',
+      parameters: [{ name: '@email', value: email.toLowerCase() }],
+    }
+    const { resources } = await usersContainer.items.query(querySpec).fetchAll()
+    return resources[0] || null
+  } catch (error) {
+    console.error('[COSMOS] Get user failed:', error)
+    return null
+  }
+}
+
+export async function createUser(userData: any): Promise<any> {
+    try {
+        const newUser = {
+            ...userData,
+            email: userData.email.toLowerCase(),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+        }
+        const { resource } = await usersContainer.items.create(newUser)
+        return resource
+    } catch (error) {
+        console.error('[COSMOS] Create user failed:', error)
+        throw new AppError('Failed to create user', 500, 'DATABASE_ERROR')
+    }
+}
+
+export async function updateUser(email: string, updates: any): Promise<any> {
+    try {
+        const existing = await getUserByEmail(email)
+        if (!existing) throw new AppError('User not found', 404)
+
+        const merged = {
+            ...existing,
+            ...updates,
+            updatedAt: new Date().toISOString(),
+        }
+        const { resource } = await usersContainer.item(existing.id, email.toLowerCase()).replace(merged)
+        return resource
+    } catch (error) {
+        console.error('[COSMOS] Update user failed:', error)
+        throw new AppError('Failed to update user', 500, 'DATABASE_ERROR')
+    }
+}
+
+/**
+ * Session Management Methods
+ */
+
+export async function createSession(sessionData: any): Promise<any> {
+    try {
+        const { resource } = await sessionsContainer.items.create(sessionData)
+        return resource
+    } catch (error) {
+        console.error('[COSMOS] Create session failed:', error)
+        return null
+    }
+}
+
+export async function getSessionByToken(token: string): Promise<any | null> {
+    try {
+        const querySpec = {
+            query: 'SELECT * FROM c WHERE c.refreshToken = @token',
+            parameters: [{ name: '@token', value: token }],
+        }
+        const { resources } = await sessionsContainer.items.query(querySpec).fetchAll()
+        return resources[0] || null
+    } catch (error) {
+        return null
+    }
+}
+
+export async function revokeSession(id: string, userId: string): Promise<void> {
+    try {
+        await sessionsContainer.item(id, userId).delete()
+    } catch (error) {
+        console.error('[COSMOS] Revoke session failed:', error)
+    }
+}
+
+export async function revokeAllUserSessions(userId: string): Promise<void> {
+    try {
+        const querySpec = {
+            query: 'SELECT * FROM c WHERE c.userId = @userId',
+            parameters: [{ name: '@userId', value: userId }],
+        }
+        const { resources } = await sessionsContainer.items.query(querySpec).fetchAll()
+        for (const session of resources) {
+            await sessionsContainer.item(session.id, userId).delete()
+        }
+    } catch (error) {
+        console.error('[COSMOS] Revoke all sessions failed:', error)
+    }
 }
