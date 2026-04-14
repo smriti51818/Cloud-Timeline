@@ -3,6 +3,8 @@ import { getUserByEmail, updateUser } from '@/lib/azure-cosmos'
 import { hashPassword } from '@/lib/password-utils'
 import { hashToken, slowEquals } from '@/lib/security-utils'
 import { invalidateAllSessions } from '@/lib/session-service'
+import { validateEmail, validatePassword, sanitizeString } from '@/lib/validation'
+import { validateCsrf } from '@/lib/csrf'
 
 /**
  * POST /api/auth/password-reset
@@ -10,12 +12,11 @@ import { invalidateAllSessions } from '@/lib/session-service'
  */
 export async function POST(request: Request) {
     try {
+        validateCsrf()
         const body = await request.json()
-        const { email, token, newPassword } = body
-
-        if (!email || !token || !newPassword) {
-            return NextResponse.json({ error: 'All fields are required' }, { status: 400 })
-        }
+        const email = validateEmail(body.email)
+        const token = sanitizeString(body.token, 100)
+        const newPassword = validatePassword(body.newPassword)
 
         const user = await getUserByEmail(email)
 

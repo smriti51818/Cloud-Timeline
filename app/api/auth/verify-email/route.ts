@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { getUserByEmail, updateUser } from '@/lib/azure-cosmos'
 import { hashToken, slowEquals } from '@/lib/security-utils'
+import { validateEmail, sanitizeString } from '@/lib/validation'
+import { validateCsrf } from '@/lib/csrf'
 
 /**
  * POST /api/auth/verify-email
@@ -8,12 +10,10 @@ import { hashToken, slowEquals } from '@/lib/security-utils'
  */
 export async function POST(request: Request) {
     try {
+        validateCsrf()
         const body = await request.json()
-        const { email, token } = body
-
-        if (!email || !token) {
-            return NextResponse.json({ error: 'Email and token are required' }, { status: 400 })
-        }
+        const email = validateEmail(body.email)
+        const token = sanitizeString(body.token, 100)
 
         const user = await getUserByEmail(email)
 

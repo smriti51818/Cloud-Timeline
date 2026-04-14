@@ -21,8 +21,8 @@ export function AppHeader() {
   const pathname = usePathname()
   const { data: session } = useSession()
 
-  // Hide the navbar on Home and Login pages
-  if (pathname === '/' || pathname === '/login') return null
+  const authRoutes = ['/', '/login', '/register', '/verify-email', '/forgot-password', '/reset-password']
+  if (authRoutes.includes(pathname)) return null
   const { theme, setTheme } = useTheme()
   const [mounted, setMounted] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
