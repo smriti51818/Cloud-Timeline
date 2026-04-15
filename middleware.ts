@@ -63,7 +63,7 @@ export async function middleware(request: NextRequest) {
 
     // Redirect to timeline if trying to access auth routes while authenticated
     if (authRoutes.some((route) => pathname.startsWith(route)) && isAuthenticated) {
-        return NextResponse.redirect(new URL('/timeline', request.url))
+        return NextResponse.redirect(new URL('/dashboard', request.url))
     }
 
     // Use absolute URL for security headers

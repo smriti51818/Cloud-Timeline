@@ -17,7 +17,7 @@ function AuthLanding() {
 
   useEffect(() => {
     if (session?.user) {
-      router.push('/timeline')
+      router.push('/dashboard')
     }
   }, [session, router])
 

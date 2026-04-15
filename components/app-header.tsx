@@ -40,7 +40,7 @@ export function AppHeader() {
     <header className="sticky top-0 z-40 border-b bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60 text-foreground">
       <div className="mx-auto max-w-7xl px-4">
         <div className="flex h-16 items-center justify-between">
-          <Link href={user ? '/timeline' : '/'} className="flex items-center gap-2" aria-label="Go to home">
+          <Link href={user ? '/dashboard' : '/'} className="flex items-center gap-2" aria-label="Go to home">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-600 to-purple-600 text-white flex items-center justify-center">
               <Sparkles className="w-4 h-4" />
             </div>

@@ -37,13 +37,13 @@ export default function LoginPage() {
         email,
         password,
         redirect: false,
-        callbackUrl: '/timeline'
+        callbackUrl: '/dashboard'
       })
 
       if (result?.error) {
         setError(result.error)
       } else {
-        router.push('/timeline')
+        router.push('/dashboard')
         router.refresh()
       }
     } catch (err) {
@@ -126,7 +126,7 @@ export default function LoginPage() {
             <Button
               variant="outline"
               className="bg-white/50"
-              onClick={() => signIn('google', { callbackUrl: '/timeline' })}
+              onClick={() => signIn('google', { callbackUrl: '/dashboard' })}
               disabled={isLoading}
             >
               <Mail className="mr-2 h-4 w-4 text-red-500" />
@@ -135,7 +135,7 @@ export default function LoginPage() {
             <Button
               variant="outline"
               className="bg-white/50"
-              onClick={() => signIn('github', { callbackUrl: '/timeline' })}
+              onClick={() => signIn('github', { callbackUrl: '/dashboard' })}
               disabled={isLoading}
             >
               <Github className="mr-2 h-4 w-4" />

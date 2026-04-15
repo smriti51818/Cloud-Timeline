@@ -241,11 +241,11 @@ export function TimelineView({ entries, onEntryUpdated, onEntryDeleted }: Timeli
             >
               <TimelineCard
                 entry={selectedEntry}
-                onUpdated={(updated) => {
+                onUpdated={(updated: TimelineEntry) => {
                   onEntryUpdated?.(updated)
                   setSelectedEntry(updated)
                 }}
-                onDeleted={(id) => {
+                onDeleted={(id: string) => {
                   onEntryDeleted?.(id)
                   setSelectedEntry(null)
                 }}
