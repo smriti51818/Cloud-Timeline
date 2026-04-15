@@ -11,6 +11,7 @@ const { encrypt, decrypt } = require('../lib/encryption')
 // Sensitive fields to migrate (must match azure-cosmos.ts)
 const SENSITIVE_FIELDS = ['title', 'description', 'transcription', 'aiCaption', 'category']
 const SENSITIVE_ARRAY_FIELDS = ['aiTags']
+const USER_SENSITIVE_FIELDS = ['name', 'image']
 
 async function migrate() {
     console.log('--- Starting Encryption Migration ---')
@@ -19,6 +20,7 @@ async function migrate() {
     const key = process.env.AZURE_COSMOS_KEY
     const databaseId = process.env.AZURE_COSMOS_DATABASE || 'timeline-db'
     const containerId = process.env.AZURE_COSMOS_CONTAINER || 'timeline-entries'
+    const usersContainerId = 'users'
 
     if (!endpoint || !key) {
         console.error('Error: Cosmos DB credentials missing in .env.local')
@@ -31,12 +33,15 @@ async function migrate() {
     }
 
     const client = new CosmosClient({ endpoint, key })
-    const container = client.database(databaseId).container(containerId)
+    const db = client.database(databaseId)
+    const container = db.container(containerId)
+    const usersContainer = db.container(usersContainerId)
 
     try {
+        // 1. Migrate Timeline Entries
         console.log(`Reading all items from ${containerId}...`)
         const { resources: items } = await container.items.readAll().fetchAll()
-        console.log(`Found ${items.length} items.`)
+        console.log(`Found ${items.length} items in ${containerId}.`)
 
         let updatedCount = 0
         let skippedCount = 0
@@ -45,12 +50,9 @@ async function migrate() {
             let needsUpdate = false
             const migratedItem = { ...item }
 
-            // Handle string fields
             for (const field of SENSITIVE_FIELDS) {
                 const val = item[field]
                 if (typeof val === 'string' && val.trim() !== '') {
-                    // Try to decrypt. If it returns the same value, it's likely plaintext.
-                    // This is a simple heuristic. A better one is checking if decrypt throws/fails.
                     const decrypted = decrypt(val)
                     if (decrypted === val) {
                         migratedItem[field] = encrypt(val)
@@ -59,7 +61,6 @@ async function migrate() {
                 }
             }
 
-            // Handle array fields
             for (const field of SENSITIVE_ARRAY_FIELDS) {
                 const arr = item[field]
                 if (Array.isArray(arr)) {
@@ -77,7 +78,7 @@ async function migrate() {
             }
 
             if (needsUpdate) {
-                console.log(`Encrypting item: ${item.id}`)
+                console.log(`Encrypting entry: ${item.id}`)
                 await container.item(item.id, item.userId).replace(migratedItem)
                 updatedCount++
             } else {
@@ -85,10 +86,43 @@ async function migrate() {
             }
         }
 
+        console.log(`Timeline migration complete. Encrypted: ${updatedCount}, Skipped: ${skippedCount}`)
+
+        // 2. Migrate User Profiles
+        console.log(`Reading all items from ${usersContainerId}...`)
+        const { resources: users } = await usersContainer.items.readAll().fetchAll()
+        console.log(`Found ${users.length} users.`)
+
+        let userUpdatedCount = 0
+        let userSkippedCount = 0
+
+        for (const user of users) {
+            let needsUpdate = false
+            const migratedUser = { ...user }
+
+            for (const field of USER_SENSITIVE_FIELDS) {
+                const val = user[field]
+                if (typeof val === 'string' && val.trim() !== '') {
+                    const decrypted = decrypt(val)
+                    if (decrypted === val) {
+                        migratedUser[field] = encrypt(val)
+                        needsUpdate = true
+                    }
+                }
+            }
+
+            if (needsUpdate) {
+                console.log(`Encrypting user profile: ${user.email}`)
+                await usersContainer.item(user.id, user.email).replace(migratedUser)
+                userUpdatedCount++
+            } else {
+                userSkippedCount++
+            }
+        }
+
         console.log('--- Migration Complete ---')
-        console.log(`Total items processed: ${items.length}`)
-        console.log(`Items encrypted: ${updatedCount}`)
-        console.log(`Items already encrypted (skipped): ${skippedCount}`)
+        console.log(`Entries encrypted: ${updatedCount}`)
+        console.log(`Users encrypted: ${userUpdatedCount}`)
 
     } catch (error) {
         console.error('Migration failed:', error)

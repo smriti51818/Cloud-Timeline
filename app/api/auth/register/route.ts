@@ -4,6 +4,7 @@ import { hashPassword } from '@/lib/password-utils'
 import { generateSecureToken, hashToken } from '@/lib/security-utils'
 import { validateRegistration } from '@/lib/validation'
 import { validateCsrf } from '@/lib/csrf'
+import { handleApiError } from '@/lib/error-handler'
 import crypto from 'crypto'
 
 /**
@@ -48,7 +49,12 @@ export async function POST(request: Request) {
         // In a real app, we would send the rawToken via email here.
         // For this audit, we'll log it in development (DO NOT LOG IN PROD)
         if (process.env.NODE_ENV === 'development') {
-            console.log(`[AUTH] Verification Token for ${email}: ${rawToken}`)
+            const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+            const verifyLink = `${appUrl}/verify-email?email=${encodeURIComponent(email)}&token=${rawToken}`
+            console.log('\n---------------------------------------------------------')
+            console.log(`[AUTH] Verification Link for ${email}:`)
+            console.log(verifyLink)
+            console.log('---------------------------------------------------------\n')
         }
 
         return NextResponse.json({ 
@@ -57,7 +63,11 @@ export async function POST(request: Request) {
         }, { status: 201 })
 
     } catch (error) {
+        if (error instanceof Error && error.name === 'ValidationError') {
+            return NextResponse.json({ error: error.message }, { status: 400 })
+        }
+        const { message, statusCode } = handleApiError(error)
         console.error('[AUTH] Registration failed:', error)
-        return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+        return NextResponse.json({ error: message }, { status: statusCode })
     }
 }

@@ -17,17 +17,22 @@ const AUTH_TAG_LENGTH = 16
 function getEncryptionKey(): Buffer {
     const key = process.env.MASTER_ENCRYPTION_KEY
     if (!key) {
+        console.error('[ENCRYPTION] MASTER_ENCRYPTION_KEY is MISSING in process.env')
         throw new AppError('MASTER_ENCRYPTION_KEY is not defined', 500, 'ENCRYPTION_ERROR')
     }
+    console.log(`[ENCRYPTION] Found key in env, string length: ${key.length}`)
 
     try {
-        const buffer = Buffer.from(key, 'base64')
+        const trimmedKey = key.trim()
+        const buffer = Buffer.from(trimmedKey, 'base64')
         if (buffer.length !== 32) {
-            throw new Error('Key must be 32 bytes base64 encoded string')
+            console.error(`[ENCRYPTION] Invalid key length: ${buffer.length} bytes (expected 32)`)
+            throw new Error(`Key must be 32 bytes base64 encoded string (got ${buffer.length})`)
         }
         return buffer
-    } catch (error) {
-        throw new AppError('Invalid MASTER_ENCRYPTION_KEY format', 500, 'ENCRYPTION_ERROR')
+    } catch (error: any) {
+        console.error('[ENCRYPTION] Key parsing failed:', error.message)
+        throw new AppError(`Invalid MASTER_ENCRYPTION_KEY format: ${error.message}`, 500, 'ENCRYPTION_ERROR')
     }
 }
 
@@ -48,16 +53,17 @@ export function encrypt(plaintext: string): string {
 
         const authTag = cipher.getAuthTag()
 
-        // Combine IV, AuthTag, and Ciphertext into a single string for storage
-        return Buffer.concat([
+        const combined = Buffer.concat([
             iv,
             authTag,
             Buffer.from(ciphertext, 'base64')
-        ]).toString('base64')
+        ])
+        
+        return combined.toString('base64')
 
-    } catch (error) {
-        console.error('[ENCRYPTION] Encrypt failed:', error)
-        throw new AppError('Data encryption failed', 500, 'ENCRYPTION_ERROR')
+    } catch (error: any) {
+        console.error('[ENCRYPTION] Encrypt failed:', error.message)
+        throw new AppError(`Data encryption failed: ${error.message}`, 500, 'ENCRYPTION_ERROR')
     }
 }
 

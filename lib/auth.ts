@@ -3,7 +3,7 @@ import GoogleProvider from 'next-auth/providers/google'
 import GitHubProvider from 'next-auth/providers/github'
 import AzureADProvider from 'next-auth/providers/azure-ad'
 import CredentialsProvider from 'next-auth/providers/credentials'
-import { getUserByEmail } from './azure-cosmos'
+import { getUserByEmail, createUser, updateUser } from './azure-cosmos'
 import { verifyPassword } from './password-utils'
 import { startUserSession, rotateRefreshToken, invalidateAllSessions, handleFailedLogin, resetLoginAttempts } from './session-service'
 import { AuthenticationError } from './error-handler'
@@ -101,38 +101,80 @@ export const authOptions: NextAuthOptions = {
     ],
     secret: process.env.NEXTAUTH_SECRET,
     callbacks: {
+        async signIn({ user, account, profile }) {
+            try {
+                if (account?.provider === 'google' || account?.provider === 'github') {
+                    if (!user.email) {
+                        console.error('[AUTH] SignIn failed: No email provided by provider')
+                        return false
+                    }
+                    
+                    const existingUser = await getUserByEmail(user.email)
+                    if (!existingUser) {
+                        console.log(`[AUTH] Creating new OAuth user for ${user.email}`)
+                        await createUser({
+                            id: user.id,
+                            email: user.email,
+                            name: user.name,
+                            image: user.image,
+                            emailVerified: new Date().toISOString(),
+                            createdAt: new Date().toISOString(),
+                            updatedAt: new Date().toISOString(),
+                        })
+                    } else {
+                        console.log(`[AUTH] Updating existing OAuth user for ${user.email}`)
+                        await updateUser(user.email, {
+                            name: user.name || existingUser.name,
+                            image: user.image || existingUser.image,
+                            updatedAt: new Date().toISOString(),
+                        })
+                    }
+                }
+                return true
+            } catch (error) {
+                console.error('[AUTH] SignIn callback error:', error)
+                return false
+            }
+        },
         async jwt({ token, user, account }) {
-            // Initial sign in
-            if (account && user) {
-                const { refreshToken } = await startUserSession(user.id, user.email!)
+            try {
+                // Initial sign in
+                if (account && user) {
+                    const dbUser = await getUserByEmail(user.email!)
+                    const userId = dbUser?.id || user.id
+
+                    const { refreshToken } = await startUserSession(userId, user.email!)
+                    return {
+                        ...token,
+                        accessToken: account.access_token,
+                        refreshToken,
+                        userId,
+                        expiry: Math.floor(Date.now() / 1000) + (15 * 60)
+                    }
+                }
+
+                // Return previous token if the access token has not expired yet
+                if (Date.now() < (token.expiry as number * 1000)) {
+                    return token
+                }
+
+                // Access token has expired, try to rotate it
+                const result = await rotateRefreshToken(token.refreshToken as string)
+                if (!result) {
+                    if (token.userId) {
+                        await invalidateAllSessions(token.userId as string)
+                    }
+                    return { ...token, error: 'RefreshAccessTokenError' }
+                }
+
                 return {
                     ...token,
-                    accessToken: account.access_token,
-                    refreshToken,
-                    userId: user.id,
+                    refreshToken: result.refreshToken,
                     expiry: Math.floor(Date.now() / 1000) + (15 * 60)
                 }
-            }
-
-            // Return previous token if the access token has not expired yet
-            if (Date.now() < (token.expiry as number * 1000)) {
-                return token
-            }
-
-            // Access token has expired, try to rotate it
-            const result = await rotateRefreshToken(token.refreshToken as string)
-            if (!result) {
-                // Potential breach or expired refresh token
-                if (token.userId) {
-                    await invalidateAllSessions(token.userId as string)
-                }
-                return { ...token, error: 'RefreshAccessTokenError' }
-            }
-
-            return {
-                ...token,
-                refreshToken: result.refreshToken,
-                expiry: Math.floor(Date.now() / 1000) + (15 * 60)
+            } catch (error) {
+                console.error('[AUTH] JWT callback error:', error)
+                return { ...token, error: 'JWTCallbackError' }
             }
         },
         async session({ session, token }) {
